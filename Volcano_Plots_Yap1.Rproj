@@ -1,13 +1,100 @@
-Version: 1.0
+# Load pergene file into R
 
-RestoreWorkspace: Default
-SaveWorkspace: Default
-AlwaysSaveHistory: Default
+setwd("Z:/Matthew/210427_Yap1Satay/pergenefiles")
 
-EnableCodeIndexing: Yes
-UseSpacesForTab: Yes
-NumSpacesForTab: 2
-Encoding: UTF-8
+# Introduce noise. This allows ratios of transposon number and reads to be calculated.
+# Noise is larger for reads as sequence reads are larger than number of transposons
 
-RnwWeave: Sweave
-LaTeX: pdfLaTeX
+noisetn=5
+noiseread=25
+
+# Create two new dataframes: voldatatn and voldataread.
+
+voldatatn<-list()
+voldataread<-list()
+
+## Populate the empty dataframes using the following for loop. 
+# The for loop reads the .txt files and assigns the number of transposons and reads to each dataframe
+# The formula (number of X per gene + noise)/sum(number of X per gene + noise) normalises the values to account for differences in library size
+
+pergenefiles<-list.files(pattern=".txt$")
+for (i in pergenefiles) {
+  voldata<-read.table(i, header = TRUE)
+  voldata$number_of_transposon_per_gene<-(voldata$number_of_transposon_per_gene+noisetn)/sum(voldata$number_of_transposon_per_gene+noisetn)
+  voldata$number_of_read_per_gene<-(voldata$number_of_read_per_gene+noiseread)/sum(voldata$number_of_read_per_gene+noiseread)
+  voldatatn[[i]]<-voldata$number_of_transposon_per_gene
+  voldataread[[i]]<-voldata$number_of_read_per_gene
+}
+
+# Make the dataframes
+
+voldatatn<-data.frame(voldatatn)
+voldataread<-data.frame(voldataread)
+
+# Assign the libraries to different sets. Testset contains mutant libraries; contset contains control libraries (i.e. WT)
+
+testset<-c(15,16,17)
+contset<-c(1,12)
+names(voldatatn[testset]) #Prints the names of the text files (allows you to check if correct)
+aa<-paste(names(voldatatn[testset]),collapse = '') #Coverts the arguments to character strings and concatenates the .txt files in testset into one
+aa<-gsub(".NlaIII_S.{1,2}_L001_R1_001.fastq_pergene.txt","",aa) # Replace the pattern ".NIaIII..." with nothing ("") in aa 
+(setname<-paste0(aa,"_vs_all"))
+
+## To compute the fold-changes:
+# Create two new variables for difference in transposons and difference in reads
+
+dtn<-voldatatn
+drd<-voldataread
+
+# To find the mean number of transposons and reads in contset: 
+
+dtnsum<-rowSums(dtn[,contset])/length(contset)
+drdsum<-rowSums(drd[,contset])/length(contset)
+
+# To fund the mean number of transposons and reads in the testset.
+# Need an if else statement, as cannot find the mean if there is only one testset
+
+if(length(testset)>1){
+  volcanotn<-rowSums(dtn[,testset])/(dtnsum*length(testset))
+  volcanoread<-rowSums(drd[,testset])/(drdsum*length(testset))
+}else{
+  volcanotn<-(dtn[,testset])/(dtnsum*length(testset))
+  volcanoread<-(drd[,testset])/(drdsum*length(testset))
+}
+
+## Use a t-test to calculate a p-value to determine if fold change for testsets is significantly different from contsets
+
+studenttn<-volcanotn
+#studentread<-volcanotn
+pb<-txtProgressBar(min=0, max = length(dtn[[1]]))
+if(length(testset)>1){
+  for (j in 1:length(dtn[[1]])) {
+    tt<-t.test(as.numeric(dtn[j,contset]), as.numeric(dtn[j,testset] ), var.equal = TRUE)
+    studenttn[j]<-tt$p.value
+    tt<-t.test(as.numeric(drd[j,contset]), as.numeric(drd[j,testset] ), var.equal = TRUE)
+    studentread[j]<-tt$p.value
+    setTxtProgressBar(pb,j)
+  }
+}else{
+  for (j in 1:length(dtn[[1]])) {
+    tt<-t.test(dtn[j,contset], mu=dtn[j,testset] )
+    studenttn[j]<-tt$p.value
+    tt<-t.test(drd[j,contset], mu=drd[j,testset] )
+    studentread[j]<-tt$p.value
+    setTxtProgressBar(pb,j)
+  }
+}
+
+# Plot the volcano plot
+
+library(plotly)
+df<-list()
+df$xx<-log2(volcanotn)
+df$yy<--log(studenttn) #+0.00000000000001)
+df$name<-voldata$gene_name
+#df$pathway<-factor(voldata$pathway)
+df<-data.frame(df)
+
+plot<-plot_ly(df, x=~xx, y=~yy, text=~name) %>% 
+  layout(title = "Number of Tns WT vs Yap1 mutants", xaxis = list(title = "log2(fold change)"), yaxis = list(title = "-log10(p-value)"))
+plot
